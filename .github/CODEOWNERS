@@ -1,0 +1,32 @@
+# ==============================================================================
+# ARCHIVO DE PROPIETARIOS DE CÓDIGO (CODEOWNERS)
+# Proyecto Final: Simulación de Teoría de Colas
+# ==============================================================================
+
+# Regla por defecto: Dirección supervisan TODO el repositorio
+* @SIMULACIONUdeC2026-02/direccion
+
+# ------------------------------------------------------------------------------
+# REVISIÓN CRUZADA DE MÓDULOS DE SRC/
+# ------------------------------------------------------------------------------
+
+# 1. Engine: Modificaciones al motor SimPy deben ser revisadas por Topologías
+/src/engine.py @SIMULACIONUdeC2026-02/equipo-topologias @SIMULACIONUdeC2026-02/direccion
+
+# 2. Topologías y Contrato: Modificaciones deben ser revisadas por Engine
+/src/config.py @SIMULACIONUdeC2026-02/equipo-engine @SIMULACIONUdeC2026-02/direccion
+/src/topologias.py @SIMULACIONUdeC2026-02/equipo-engine @SIMULACIONUdeC2026-02/direccion
+
+# 3. Métricas: Modificaciones a los cálculos deben ser revisadas por UI
+/src/metrics.py @SIMULACIONUdeC2026-02/equipo-ui @SIMULACIONUdeC2026-02/direccion
+
+# 4. UI Streamlit: Modificaciones a la interfaz deben ser revisadas por Métricas
+/src/app.py @SIMULACIONUdeC2026-02/equipo-metricas @SIMULACIONUdeC2026-02/direccion
+
+# ------------------------------------------------------------------------------
+# TESTS Y ARCHIVOS DE ENTORNO
+# ------------------------------------------------------------------------------
+/tests/test_engine.py @SIMULACIONUdeC2026-02/equipo-engine @SIMULACIONUdeC2026-02/direccion
+/tests/test_topologias.py @SIMULACIONUdeC2026-02/equipo-topologias @SIMULACIONUdeC2026-02/direccion
+/tests/test_metrics.py @SIMULACIONUdeC2026-02/equipo-metricas @SIMULACIONUdeC2026-02/direccion
+/requirements.txt @SIMULACIONUdeC2026-02/direccion
