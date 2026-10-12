@@ -1,0 +1,81 @@
+name: Tarea
+description: Unidad de trabajo asignada a un equipo
+title: "[Tarea] "
+labels: ["tarea"]
+body:
+  - type: dropdown
+    id: equipo
+    attributes:
+      label: Equipo
+      options:
+        - Engine
+        - Topologías
+        - Métricas
+        - UI
+    validations:
+      required: true
+
+  - type: textarea
+    id: descripcion
+    attributes:
+      label: Descripción
+      description: Qué hay que construir y por qué hace falta.
+      placeholder: "Ej. Función que genera clientes según lambda_por_hora del contrato de entrada."
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: archivos
+    attributes:
+      label: Archivos principales involucrados
+      options:
+        - label: "src/engine.py (Motor SimPy)"
+        - label: "src/config.py (Contrato y validaciones)"
+        - label: "src/topologias.py (Variantes y topologías)"
+        - label: "src/metrics.py (Cálculos estadísticos)"
+        - label: "src/app.py (Interfaz Streamlit)"
+        - label: "tests/ (Pruebas unitarias)"
+        - label: "Otro (especificar en descripción)"
+
+  - type: dropdown
+    id: contrato
+    attributes:
+      label: Contrato de datos afectado
+      description: Si esta tarea cambia la estructura de algún JSON, hay que consensuarlo.
+      options:
+        - Ninguno
+        - Contrato de entrada (configuración)
+        - Contrato de salida (resultado)
+        - Ambos
+    validations:
+      required: true
+
+  - type: textarea
+    id: criterios
+    attributes:
+      label: Criterios de aceptación
+      description: Requisitos verificables para dar por cerrada la tarea.
+      value: |
+        - [ ] Cumple con la firma de funciones acordada
+        - [ ] Tiene al menos un test en `tests/`
+        - [ ] Funciones documentadas con docstrings (tipos de entrada y salida)
+    validations:
+      required: true
+
+  - type: textarea
+    id: dependencias
+    attributes:
+      label: Dependencias
+      description: Issues que bloquean esta tarea o que dependen de ella.
+      placeholder: "Depende de #5 / Desbloquea #8"
+
+  - type: dropdown
+    id: prioridad
+    attributes:
+      label: Prioridad
+      options:
+        - Alta
+        - Media
+        - Baja
+    validations:
+      required: true
