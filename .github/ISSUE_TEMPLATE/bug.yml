@@ -1,0 +1,48 @@
+name: Error
+description: Algo no funciona o da un resultado matemático incorrecto
+title: "[Error] "
+labels: ["bug"]
+body:
+  - type: dropdown
+    id: equipo
+    attributes:
+      label: Módulo donde ocurre el problema
+      options:
+        - Engine
+        - Topologías
+        - Métricas
+        - UI
+        - Indeterminado / General
+    validations:
+      required: true
+
+  - type: textarea
+    id: que_paso
+    attributes:
+      label: Comportamiento observado
+      description: Qué falló o qué mensaje de excepción lanzó Python.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproducir
+    attributes:
+      label: JSON de entrada para reproducir
+      description: Pega aquí la configuración exacta con la que ocurrió la falla.
+      render: json
+    validations:
+      required: true
+
+  - type: textarea
+    id: esperado
+    attributes:
+      label: Resultado esperado vs obtenido
+      description: Si es discrepancia en métricas, indica los valores teóricos conocidos (ej. ejercicios 5.12 o 5.13).
+    validations:
+      required: true
+
+  - type: input
+    id: entorno
+    attributes:
+      label: Entorno de ejecución
+      placeholder: "Python 3.11, Fedora/Windows, rama feature/..."
