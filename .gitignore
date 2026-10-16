@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+
+# Entornos virtuales
+.venv/
+venv/
+env/
+
+# Secretos y datos locales
+.env
+*.log
+
+# Editores y sistema
+.vscode/
+.idea/
+.DS_Store

@@ -1,0 +1,14 @@
+# Motor de simulación
+simpy
+numpy
+scipy
+
+# Análisis de resultados
+pandas
+
+# Interfaz y gráficas
+streamlit
+plotly
+
+# Pruebas
+pytest
