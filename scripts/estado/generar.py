@@ -90,10 +90,13 @@ def descargar(repo: str, token: str | None):
         commits = paginar(f"/repos/{repo}/commits?sha=main", token)
     except urllib.error.HTTPError:
         commits = []
-    try:  # solo funciona si el token tiene permiso de escritura; si no, se ignora
-        colab = [c["login"] for c in paginar(f"/repos/{repo}/collaborators", token)]
-    except Exception:
-        colab = []
+    colab = []  # cada fuente es opcional: si el token no alcanza, se ignora
+    for ruta in (f"/repos/{repo}/collaborators", f"/orgs/{repo.split('/')[0]}/members"):
+        try:
+            colab += [c["login"] for c in paginar(ruta, token)]
+        except Exception:
+            pass
+    colab = sorted(set(colab))
     return prs_raw, issues_raw, revisiones, commits, colab
 
 
@@ -146,6 +149,7 @@ def equipo_de(texto: str):
 def construir_roster(equipo, prs_raw, issues_raw, commits, colaboradores, nombres):
     """Lista de integrantes: equipo.json (si existe) + colaboradores + asignados + autores de PR y commits."""
     roster = {}
+    excluir = {x.lower() for x in equipo.get("excluir", [])}
     for m in equipo.get("integrantes", []):
         if not m["login"].startswith("usuario-ejemplo"):
             roster[m["login"].lower()] = dict(m)
@@ -170,7 +174,7 @@ def construir_roster(equipo, prs_raw, issues_raw, commits, colaboradores, nombre
         if a:
             vistos.add(a)
     for a in vistos:
-        if a.endswith("[bot]") or a.lower() in roster:
+        if a.endswith("[bot]") or a.lower() in roster or a.lower() in excluir:
             continue
         v = votos.get(a.lower())
         roster[a.lower()] = {"login": a, "nombre": nombres.get(a.lower(), a),
@@ -274,49 +278,6 @@ def _norm(t: str) -> str:
     return (t.lower().replace("í", "i").replace("é", "e").replace("á", "a").replace("ó", "o").replace("ú", "u"))
 
 
-def equipo_de_pr(p: dict) -> str | None:
-    """Deduce el equipo por la rama (feature/<equipo>-<tarea>) o el alcance del título (feat(<equipo>): ...)."""
-    texto = _norm(p["head"]["ref"]) + " " + _norm(p["title"])
-    for clave, nombre in EQUIPOS.items():
-        if re.search(rf"(feature/|\(|/){clave}\b|\b{clave}[-_)]", texto):
-            return nombre
-    return None
-
-
-def descubrir_logins(repo: str, token: str | None) -> list[str]:
-    """Colaboradores del repo y, si es una organización, sus miembros. Cada fuente es opcional."""
-    logins = set()
-    for ruta in (f"/repos/{repo}/collaborators", f"/orgs/{repo.split('/')[0]}/members"):
-        try:
-            logins |= {u["login"] for u in paginar(ruta, token)}
-        except Exception:
-            pass
-    return sorted(logins)
-
-
-def completar_equipo(equipo: dict, prs_raw, issues_raw, auto_logins) -> dict:
-    """equipo.json manda; el resto se completa solo con colaboradores, autores de PR y asignados."""
-    excluir = {x.lower() for x in equipo.get("excluir", [])}
-    manual = {m["login"].lower(): dict(m) for m in equipo.get("integrantes", []) if not m["login"].startswith("usuario-ejemplo")}
-    equipos_por = defaultdict(Counter)
-    for p in prs_raw:
-        e = equipo_de_pr(p)
-        if e:
-            equipos_por[(p.get("user") or {}).get("login", "").lower()][e] += 1
-    candidatos = set(l.lower() for l in auto_logins) | {(p.get("user") or {}).get("login", "").lower() for p in prs_raw}
-    for i in issues_raw:
-        candidatos |= {a["login"].lower() for a in i.get("assignees", [])}
-    todos = {}
-    for login in candidatos | set(manual):
-        if not login or login.endswith("[bot]") or login in excluir:
-            continue
-        m = manual.get(login, {"login": login})
-        m.setdefault("nombre", login)
-        if not m.get("equipo"):
-            m["equipo"] = equipos_por[login].most_common(1)[0][0] if equipos_por.get(login) else "Sin equipo"
-        todos[login] = m
-    return {"integrantes": list(todos.values())}
-
 # ------------------------------------------------------------------- Demo --
 def datos_demo():
     """Datos inventados (nombres falsos) solo para revisar el diseño."""
@@ -373,12 +334,15 @@ def main():
     else:
         repo = os.environ["GITHUB_REPOSITORY"]
         token = os.environ.get("GITHUB_TOKEN")
-        equipo = json.loads((AQUI / "equipo.json").read_text(encoding="utf-8"))
+        ruta_eq = AQUI / "equipo.json"
+        equipo = json.loads(ruta_eq.read_text(encoding="utf-8")) if ruta_eq.exists() else {"integrantes": []}
         notas = json.loads((AQUI / "notas.json").read_text(encoding="utf-8"))
-        prs_raw, issues_raw, revs, commits = descargar(repo, token)
-        equipo = completar_equipo(equipo, prs_raw, issues_raw, descubrir_logins(repo, token))
+        prs_raw, issues_raw, revs, commits, colab = descargar(repo, token)
         proyecto = leer_project(notas, os.environ.get("PROJECT_TOKEN"))
-    datos = procesar(prs_raw, issues_raw, revs, commits, equipo, notas, proyecto)
+        quienes = {(p.get("user") or {}).get("login") for p in prs_raw} | set(colab) | \
+                  {x["login"] for i in issues_raw for x in i.get("assignees", [])}
+        nombres = nombres_reales([q for q in quienes if q and not q.endswith("[bot]")], token)
+    datos = procesar(prs_raw, issues_raw, revs, commits, equipo, notas, proyecto, colab, nombres)
     datos["repo"] = "equipo/demo (datos inventados)" if a.demo else os.environ["GITHUB_REPOSITORY"]
 
     plantilla = (AQUI / "plantilla.html").read_text(encoding="utf-8")
