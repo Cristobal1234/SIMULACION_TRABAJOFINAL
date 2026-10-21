@@ -7,9 +7,9 @@ on:
   issues:
     types: [opened, closed, reopened, assigned, unassigned, edited]
   pull_request_target:            # corre en el contexto de main; no ejecuta código del PR
-    types: [opened, closed, reopened, ready_for_review, converted_to_draft, review_requested]
+    types: [opened, closed, reopened, synchronize, edited, ready_for_review, converted_to_draft, review_requested]
   schedule:
-    - cron: "17 * * * *"          # cada hora: recoge revisiones, comentarios y cambios del Project
+    - cron: "*/15 * * * *"        # cada 15 min: recoge revisiones, comentarios y cambios del Project
   workflow_dispatch:
 
 permissions:
