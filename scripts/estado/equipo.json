@@ -1,0 +1,4 @@
+{
+  "_ayuda": "OPCIONAL. El panel arma la lista solo (colaboradores, asignados, autores de PR y commits). Usa este archivo solo para corregir un nombre o un equipo, o para agregar a alguien que aún no ha hecho nada. Equipos: Engine, Topologías, Métricas, UI, Config.",
+  "integrantes": []
+}
