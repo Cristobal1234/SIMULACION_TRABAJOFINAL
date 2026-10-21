@@ -37,5 +37,6 @@ jobs:
             cuerpo+="Estos commits no siguen \`tipo: descripción\` (tipos: feat, fix, docs):"$'\n\n'
             cuerpo+="$malos"$'\n'
             cuerpo+="No bloquea el merge. Para el próximo commit, ejemplo: \`feat: agrega generador de llegadas\`."
-            gh pr comment "$PR" --edit-last --create-if-none --body "$cuerpo"
+            gh pr comment "$PR" --edit-last --create-if-none --body "$cuerpo" \
+              || echo "::notice::No se pudo comentar en el PR (viene de un fork); el aviso queda en este log."
           fi
