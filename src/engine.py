@@ -1,4 +1,7 @@
-"""Motor SimPy: primera entrega, una estación con cola FIFO compartida."""
+"""Motor SimPy: simulación de eventos discretos para teoría de colas."""
+from __future__ import annotations
+
+from collections import deque
 import math
 import random
 import re
@@ -6,19 +9,80 @@ import unicodedata
 
 import simpy
 
+from src.config import validar_config
+from src.contrato_salida import validar_resultado
+from src.metrics import calcular_metricas
 
-def _positivo(valor, nombre):
+
+def _positivo(valor, nombre: str):
     """Recibe un valor numérico y su nombre; devuelve el valor o lanza ValueError."""
     if isinstance(valor, bool) or not isinstance(valor, (int, float)) or not math.isfinite(valor) or valor <= 0:
         raise ValueError(f"{nombre} debe ser un número finito mayor que cero")
     return valor
 
 
+def _finito_no_negativo(valor, nombre: str):
+    """Recibe un valor numérico y su nombre; devuelve el valor si es finito y >= 0 o lanza ValueError."""
+    if isinstance(valor, bool) or not isinstance(valor, (int, float)) or not math.isfinite(valor) or valor < 0:
+        raise ValueError(f"{nombre} debe ser un número finito mayor o igual a cero")
+    return valor
+
+
+def _generar_servicio(conf_srv: tuple, azar: random.Random) -> float:
+    """Genera un tiempo de servicio según la configuración del servidor."""
+    if conf_srv[0] == 'exponencial':
+        return azar.expovariate(1.0 / conf_srv[1])
+    return azar.uniform(conf_srv[1], conf_srv[2])
+
+
+def _determinar_es_preferencial(proporcion: float | None, azar: random.Random) -> bool:
+    """Sortea si un cliente pertenece a la clase preferencial usando el generador dado."""
+    if proporcion is None:
+        return False
+    return azar.random() < proporcion
+
+
+def _elegir_cola_multiple(est_info: dict, azar: random.Random) -> int:
+    """Elige el índice (0..k-1) de la cola para una estación con colas múltiples."""
+    reparticion = est_info['reparticion']
+    cantidad_colas = est_info['cantidad_colas']
+
+    if reparticion == 'round_robin':
+        cola_idx = est_info['turno']
+        est_info['turno'] = (cola_idx + 1) % cantidad_colas
+        return cola_idx
+
+    if reparticion == 'aleatoria':
+        return azar.randrange(cantidad_colas)
+
+    if reparticion == 'mas_corta':
+        if est_info['cantidad_servidores'] > 1:
+            recursos = est_info['recursos']
+            return min(
+                range(cantidad_colas),
+                key=lambda idx: recursos[idx].count + len(recursos[idx].queue),
+            )
+        recurso = est_info['recurso_unico']
+        cola_de_req = est_info['cola_de_req']
+        longitudes = [0] * cantidad_colas
+        for pendiente in recurso.queue:
+            q_idx = cola_de_req.get(id(pendiente))
+            if q_idx is not None:
+                longitudes[q_idx] += 1
+        return min(range(cantidad_colas), key=lambda idx: longitudes[idx])
+
+    raise NotImplementedError(f"Repartición no soportada: '{reparticion}'")
+
+
 def ejecutar_simulacion(config: dict) -> dict:
     """Recibe el contrato de entrada y devuelve datos crudos sin envolver en 'resultado'.
 
-    Primera entrega: método paralelo, una estación, cola única FIFO y uno
-    o varios servidores, sin prioridad. Servicio exponencial o uniforme.
+    Soporta:
+    - Método paralelo (1 estación) y método secuencial (N estaciones en serie o con rutas).
+    - Colas únicas FIFO, colas múltiples (round_robin, aleatoria, mas_corta) y colas
+      preferenciales (prioridad no expropiativa) por estación, con uno o varios servidores.
+    - Servicio exponencial o uniforme por cada servidor.
+
     Las llegadas se generan hasta duracion_minutos (extremo excluido).
     Después se atiende a los clientes pendientes; duracion_total_minutos
     incluye ese vaciado y nunca es menor que la ventana de llegadas.
@@ -26,70 +90,207 @@ def ejecutar_simulacion(config: dict) -> dict:
     Configuraciones incompletas o inválidas lanzan ValueError; variantes
     aún no implementadas lanzan NotImplementedError.
     """
+    errores = validar_config(config)
+    if errores:
+        raise ValueError("Configuración incompleta o mal formada:\n" + "\n".join(f"- {e}" for e in errores))
+
     try:
         simulacion = config['simulacion']
         estaciones = config['estaciones']
-        if simulacion['metodo'] != 'paralelo' or len(estaciones) != 1:
-            raise NotImplementedError('Primera entrega: paralelo con una estación')
-        estacion = estaciones[0]
-        colas = estacion['colas']
-        if (colas['tipo'] != 'unica' or colas['cantidad'] != 1
-                or colas['disciplina'] != 'FIFO'
-                or estacion.get('clientes_preferenciales', {}).get('aplica', False)
-                or estacion.get('siguiente_estacion') is not None):
-            raise NotImplementedError('Primera entrega: cola única FIFO sin prioridad')
+        metodo = simulacion.get('metodo')
+        if metodo not in ('paralelo', 'secuencial'):
+            raise NotImplementedError(f"Método '{metodo}' no soportado")
+
+        pref_cfg = simulacion.get('clientes_preferenciales')
+        proporcion_preferencial = None
+        if pref_cfg is not None:
+            proporcion_preferencial = _positivo(pref_cfg['proporcion'], 'clientes_preferenciales.proporcion')
+            if proporcion_preferencial >= 1:
+                raise ValueError('clientes_preferenciales.proporcion debe ser menor que 1')
+
         duracion = _positivo(simulacion['duracion_minutos'], 'duracion_minutos')
         llegada = simulacion['llegada']
         if llegada['distribucion'] != 'poisson':
             raise NotImplementedError('Solo se admiten llegadas Poisson')
-        tasa = _positivo(llegada['lambda_por_hora'], 'lambda_por_hora') / 60
-        cantidad = estacion['servidores']['cantidad']
-        if isinstance(cantidad, bool) or not isinstance(cantidad, int) or cantidad < 1:
-            raise ValueError('cantidad de servidores debe ser un entero positivo')
-        servicio = estacion['servidores']['distribucion_servicio']
-        tipo = servicio['tipo']
-        if tipo == 'exponencial':
-            media = _positivo(servicio['media'], 'media')
-        elif tipo == 'uniforme':
-            minimo = _positivo(servicio['min'], 'min')
-            maximo = _positivo(servicio['max'], 'max')
-            if minimo > maximo:
-                raise ValueError('min no puede ser mayor que max')
-        else:
-            raise NotImplementedError('Servicio: exponencial o uniforme')
-        estacion_id = estacion['id']
-        nombre = simulacion['nombre']
-        if not isinstance(nombre, str) or not isinstance(estacion_id, str) or not estacion_id:
-            raise ValueError('nombre e id de estación deben ser textos; id no puede estar vacío')
+        tasa = _positivo(llegada['lambda_por_hora'], 'lambda_por_hora') / 60.0
+
         semilla = simulacion.get('semilla')
         if semilla is not None and (isinstance(semilla, bool) or not isinstance(semilla, int)):
             raise ValueError('semilla debe ser un entero o null')
+        nombre = simulacion.get('nombre', 'simulacion')
+
+        # Procesar y validar cada estación
+        estaciones_map = {}
+        for est in estaciones:
+            est_id = est['id']
+            colas = est['colas']
+            tipo_cola = colas.get('tipo')
+            cantidad_colas = colas.get('cantidad')
+            reparticion = colas.get('reparticion')
+
+            if tipo_cola not in ('unica', 'multiple', 'preferencial'):
+                raise NotImplementedError(
+                    f"Estación '{est_id}': tipo de cola '{tipo_cola}' no soportado"
+                )
+
+            servidores = est['servidores']
+            cantidad_srv = len(servidores)
+            if cantidad_srv < 1:
+                raise ValueError(f"Estación '{est_id}': cantidad de servidores debe ser mayor que cero")
+
+            if tipo_cola == 'unica' and cantidad_colas != 1:
+                raise ValueError(f"Estación '{est_id}': cola única requiere cantidad = 1")
+            if tipo_cola == 'multiple':
+                if cantidad_colas < 2:
+                    raise ValueError(f"Estación '{est_id}': colas múltiples requiere cantidad >= 2")
+                if cantidad_srv > 1 and cantidad_colas != cantidad_srv:
+                    raise ValueError(
+                        f"Estación '{est_id}': con varios servidores se requiere cantidad de colas igual al número de servidores"
+                    )
+                if reparticion not in ('round_robin', 'aleatoria', 'mas_corta'):
+                    raise NotImplementedError(
+                        f"Estación '{est_id}': repartición '{reparticion}' no soportada"
+                    )
+            if tipo_cola == 'preferencial':
+                if cantidad_colas != 2:
+                    raise ValueError(f"Estación '{est_id}': cola preferencial requiere exactamente 2 colas")
+                if proporcion_preferencial is None:
+                    raise ValueError(
+                        f"Estación '{est_id}': cola preferencial requiere definir clientes_preferenciales"
+                    )
+
+            servicios_config = []
+            for idx, srv in enumerate(servidores, 1):
+                servicio = srv['servicio']
+                tipo_srv = servicio['tipo']
+                if tipo_srv == 'exponencial':
+                    media = _positivo(servicio['media'], f"estacion '{est_id}' servidor {idx} media")
+                    servicios_config.append(('exponencial', media))
+                elif tipo_srv == 'uniforme':
+                    minimo = _finito_no_negativo(servicio['min'], f"estacion '{est_id}' servidor {idx} min")
+                    maximo = _positivo(servicio['max'], f"estacion '{est_id}' servidor {idx} max")
+                    if minimo >= maximo:
+                        raise ValueError(f"estacion '{est_id}' servidor {idx}: min debe ser menor que max")
+                    servicios_config.append(('uniforme', minimo, maximo))
+                else:
+                    raise NotImplementedError(f"Servicio no soportado: '{tipo_srv}'")
+
+            estaciones_map[est_id] = {
+                'id': est_id,
+                'tipo_cola': tipo_cola,
+                'cantidad_colas': cantidad_colas,
+                'reparticion': reparticion,
+                'cantidad_servidores': cantidad_srv,
+                'servicios': servicios_config,
+                'salidas': est.get('salidas') or [],
+            }
+
+        estacion_inicial = simulacion.get('estacion_entrada') or estaciones[0]['id']
+
     except (KeyError, TypeError, IndexError, AttributeError) as error:
         raise ValueError(f'Configuración incompleta o mal formada: {error}') from error
 
     azar = random.Random(semilla)
     entorno = simpy.Environment()
-    # Store mantiene en FIFO a los clientes que esperan un servidor libre.
-    disponibles = simpy.Store(entorno, capacity=cantidad)
-    disponibles.items.extend(range(1, cantidad + 1))
+
+    # Inicializar recursos SimPy según el tipo de cola de cada estación
+    for est_info in estaciones_map.values():
+        cant_srv = est_info['cantidad_servidores']
+        if est_info['tipo_cola'] == 'unica':
+            almacen = simpy.Store(entorno, capacity=cant_srv)
+            almacen.items.extend(range(1, cant_srv + 1))
+            est_info['disponibles'] = almacen
+        elif est_info['tipo_cola'] == 'multiple':
+            est_info['turno'] = 0
+            if cant_srv > 1:
+                est_info['recursos'] = [
+                    simpy.Resource(entorno, capacity=1) for _ in range(cant_srv)
+                ]
+            else:
+                est_info['recurso_unico'] = simpy.Resource(entorno, capacity=1)
+                est_info['cola_de_req'] = {}
+        else:  # preferencial
+            est_info['recurso_prioridad'] = simpy.PriorityResource(entorno, capacity=cant_srv)
+            est_info['servidores_libres'] = deque(range(1, cant_srv + 1))
+
     eventos = []
 
-    def atender(cliente):
-        """Recibe un evento de cliente; registra su servicio y devuelve un proceso."""
-        servidor = yield disponibles.get()
-        inicio = entorno.now
-        tiempo = azar.expovariate(1 / media) if tipo == 'exponencial' else azar.uniform(minimo, maximo)
-        yield entorno.timeout(tiempo)
+    def atender_en_estacion(est_id: str, cliente: dict):
+        """Atiende al cliente en una estación y determina la siguiente parada."""
+        est_info = estaciones_map[est_id]
+        t_inicio_espera = entorno.now
+
+        if est_info['tipo_cola'] == 'unica':
+            cola_asignada = 1
+            servidor = yield est_info['disponibles'].get()
+            t_inicio_servicio = entorno.now
+            tiempo = _generar_servicio(est_info['servicios'][servidor - 1], azar)
+            yield entorno.timeout(tiempo)
+            t_fin_servicio = entorno.now
+            yield est_info['disponibles'].put(servidor)
+        elif est_info['tipo_cola'] == 'multiple':
+            cola_idx = _elegir_cola_multiple(est_info, azar)
+            cola_asignada = cola_idx + 1
+            if est_info['cantidad_servidores'] > 1:
+                servidor = cola_asignada
+                recurso = est_info['recursos'][cola_idx]
+                with recurso.request() as req:
+                    yield req
+                    t_inicio_servicio = entorno.now
+                    tiempo = _generar_servicio(est_info['servicios'][servidor - 1], azar)
+                    yield entorno.timeout(tiempo)
+                    t_fin_servicio = entorno.now
+            else:
+                servidor = 1
+                recurso = est_info['recurso_unico']
+                with recurso.request() as req:
+                    if not req.triggered:
+                        est_info['cola_de_req'][id(req)] = cola_idx
+                    try:
+                        yield req
+                    finally:
+                        est_info['cola_de_req'].pop(id(req), None)
+                    t_inicio_servicio = entorno.now
+                    tiempo = _generar_servicio(est_info['servicios'][0], azar)
+                    yield entorno.timeout(tiempo)
+                    t_fin_servicio = entorno.now
+        else:  # preferencial
+            cola_asignada = 1 if cliente['es_preferencial'] else 2
+            prioridad = 0 if cliente['es_preferencial'] else 1
+            with est_info['recurso_prioridad'].request(priority=prioridad) as req:
+                yield req
+                servidor = est_info['servidores_libres'].popleft()
+                t_inicio_servicio = entorno.now
+                tiempo = _generar_servicio(est_info['servicios'][servidor - 1], azar)
+                try:
+                    yield entorno.timeout(tiempo)
+                finally:
+                    t_fin_servicio = entorno.now
+                    est_info['servidores_libres'].append(servidor)
+
         cliente['paradas'].append({
-            'estacion_id': estacion_id,
-            'tiempo_inicio_espera': cliente['tiempo_entrada_sistema'],
-            'tiempo_inicio_servicio': inicio,
-            'tiempo_fin_servicio': entorno.now,
+            'estacion_id': est_id,
+            'tiempo_inicio_espera': t_inicio_espera,
+            'tiempo_inicio_servicio': t_inicio_servicio,
+            'tiempo_fin_servicio': t_fin_servicio,
             'servidor_asignado': servidor,
-            'cola_asignada': 1,
+            'cola_asignada': cola_asignada,
         })
+
+        salidas = est_info['salidas']
+        if salidas:
+            destinos = [s['hacia'] for s in salidas]
+            pesos = [s['probabilidad'] for s in salidas]
+            siguiente_id = azar.choices(destinos, weights=pesos, k=1)[0]
+            return siguiente_id
+        return None
+
+    def proceso_cliente(cliente: dict):
+        """Ciclo de vida del cliente desde su entrada hasta su salida del sistema."""
+        estacion_actual_id = estacion_inicial
+        while estacion_actual_id is not None:
+            estacion_actual_id = yield from atender_en_estacion(estacion_actual_id, cliente)
         cliente['tiempo_salida_sistema'] = entorno.now
-        yield disponibles.put(servidor)
 
     def generar_llegadas():
         """Genera el proceso de llegadas externas dentro de la ventana configurada."""
@@ -100,20 +301,70 @@ def ejecutar_simulacion(config: dict) -> dict:
             yield entorno.timeout(intervalo)
             cliente = {
                 'cliente_id': len(eventos) + 1,
-                'es_preferencial': False,
+                'es_preferencial': _determinar_es_preferencial(proporcion_preferencial, azar),
                 'tiempo_entrada_sistema': entorno.now,
                 'tiempo_salida_sistema': None,
                 'paradas': [],
             }
             eventos.append(cliente)
-            entorno.process(atender(cliente))
+            entorno.process(proceso_cliente(cliente))
 
     entorno.process(generar_llegadas())
     entorno.run()
-    nombre_ascii = unicodedata.normalize('NFKD', nombre).encode('ascii', 'ignore').decode()
+
+    nombre_ascii = unicodedata.normalize('NFKD', str(nombre)).encode('ascii', 'ignore').decode()
     identificador = re.sub(r'[^a-z0-9]+', '_', nombre_ascii.lower()).strip('_') or 'simulacion'
     return {
         'simulacion_id': identificador,
         'duracion_total_minutos': max(duracion, entorno.now),
         'eventos_clientes': eventos,
     }
+
+
+def simular(config: dict) -> dict:
+    """Recorrido completo de una simulación: lo que la interfaz necesita para mostrar resultados.
+
+    Pasos:
+    1. ``validar_config(config)``: si hay errores lanza ValueError con la lista completa.
+    2. ``ejecutar_simulacion(config)``: genera los eventos crudos de los clientes.
+    3. ``calcular_metricas(...)``: agrega el bloque "metricas". Mientras Métricas no lo
+       implemente (lanza NotImplementedError), se devuelve el resultado sin "metricas".
+    4. ``validar_resultado(resultado, config)``: si la salida no respeta el contrato,
+       lanza RuntimeError (sería un error interno del motor, no de la configuración).
+    5. Devuelve ``{"resultado": resultado}``, el mismo formato de
+       examples/resultados_ejemplo/ que la interfaz lee de st.session_state["resultado"].
+
+    Args:
+        config: configuración según el contrato de entrada (docs/contratos.md).
+
+    Returns:
+        Diccionario {"resultado": {...}} con simulacion_id, duracion_total_minutos,
+        eventos_clientes y, si ya está disponible, metricas.
+
+    Raises:
+        ValueError: si la configuración no es válida.
+        NotImplementedError: si la configuración usa una variante no soportada.
+        RuntimeError: si el resultado generado no pasa validar_resultado.
+    """
+    errores = validar_config(config)
+    if errores:
+        raise ValueError("Configuración inválida:\n" + "\n".join(f"- {e}" for e in errores))
+
+    resultado = ejecutar_simulacion(config)
+
+    try:
+        resultado['metricas'] = calcular_metricas(
+            resultado['eventos_clientes'], config, resultado['duracion_total_minutos']
+        )
+    except NotImplementedError:
+        # Pendiente Issue #17 (Métricas): se entrega el resultado sin el bloque "metricas".
+        pass
+
+    errores_resultado = validar_resultado(resultado, config)
+    if errores_resultado:
+        raise RuntimeError(
+            "El resultado de la simulación no respeta el contrato de salida:\n"
+            + "\n".join(f"- {e}" for e in errores_resultado)
+        )
+
+    return {'resultado': resultado}
